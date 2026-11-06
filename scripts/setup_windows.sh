@@ -26,7 +26,7 @@ tools/venv/Scripts/python.exe -m pip install -q --disable-pip-version-check \
 echo "== Sources"
 fresh_runtime=0
 [ -d tools/ps3recomp/.git ] || fresh_runtime=1
-pin ps3recomp      sp00nznet/ps3recomp         5244db92669b54831c6d3ebb7a96d58c4dbfa6df
+pin ps3recomp      sp00nznet/ps3recomp         4e8f3ca87a3e1d87bb83b8b7e9348fe2685cd514
 pin Vulkan-Headers KhronosGroup/Vulkan-Headers c46850864f4661461b0f6cb9922c058ffea4915e
 pin glslang-src    KhronosGroup/glslang        2fbed5e1fb43a1c480fe020e3bb686a31010989a
 pin zlib           madler/zlib                 767c4c947852e143f582c85f14cf573411df1b35
