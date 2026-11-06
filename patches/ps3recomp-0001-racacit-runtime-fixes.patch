@@ -31025,10 +31025,10 @@ index 9cb50400..933d4498 100644
  }
  
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 5fc50208..a5982c8f 100644
+index 5fc50208..04930435 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
-@@ -13,6 +13,37 @@
+@@ -13,6 +13,44 @@
   */
  
  #include "spu_dma.h"
@@ -31042,10 +31042,17 @@ index 5fc50208..a5982c8f 100644
 + * round-to-nearest, so the mode is left alone (RACACIT_SPU_CSR_RZ=1 brings
 + * the old one back, for comparison). */
 +#include <stdlib.h>   /* getenv */
++/* SPU_FLOAT_FAST (spu_helpers.h: RACiT's own float model, back from v0.13) needs the mode on:
++ * its fast path is the SPU's result only under DAZ + FTZ + round toward zero. Then it is the
++ * default, and RACACIT_SPU_CSR_RZ=0 turns it off. */
 +static inline unsigned long long spu_csr_spu(unsigned long long v)
 +{
 +    static int rz = -1;
++#if defined(SPU_FLOAT_FAST)
++    if (rz < 0) { const char* e = getenv("RACACIT_SPU_CSR_RZ"); rz = !(e && *e == '0'); }
++#else
 +    if (rz < 0) { const char* e = getenv("RACACIT_SPU_CSR_RZ"); rz = e && *e == '1'; }
++#endif
 +    return rz ? (v | 0xE040u) : v;
 +}
 +#define SPU_CSR_SPU(v) spu_csr_spu(v)
@@ -31066,7 +31073,7 @@ index 5fc50208..a5982c8f 100644
  #include "spu_coherency.h" /* lock-line lock + PPU-write coherence bitmap */
  #include "spu_helpers.h"   /* spu_splat_u32 / spu_ls_read128 (SMC microstep) */
  #include "spu_lockstep.h"
-@@ -23,7 +54,7 @@
+@@ -23,7 +61,7 @@
  #include <stdatomic.h>
  #include <stdio.h>
  #include <stdlib.h>
@@ -31075,7 +31082,7 @@ index 5fc50208..a5982c8f 100644
  /* setjmp/longjmp also save and restore the signal mask on POSIX: one
   * sigprocmask system call per halt, stack reset or task resume. These frames
   * never cross a signal handler, so the mask is the same at both ends. */
-@@ -34,8 +65,34 @@
+@@ -34,8 +72,34 @@
  #define SPU_SETJMP(env) _setjmp(env)
  #define SPU_LONGJMP(env, v) _longjmp(env, v)
  #endif
@@ -31110,7 +31117,7 @@ index 5fc50208..a5982c8f 100644
  #endif
  #include <time.h>
  #include "../platform/win32_compat.h"
-@@ -177,6 +234,10 @@ void (*g_spu_out_mbox_hook)(uint32_t group_id, uint32_t spu_id,
+@@ -177,6 +241,10 @@ void (*g_spu_out_mbox_hook)(uint32_t group_id, uint32_t spu_id,
   * installed, so a title with no SPU-built FIFO pays nothing. */
  void (*g_spu_put_hook)(uint32_t ea, uint32_t size) = 0;
  
@@ -31121,7 +31128,7 @@ index 5fc50208..a5982c8f 100644
  void spu_halt(spu_context* ctx)
  {
      /* Register/context dump at halt-asserts: the WWS job's parameter guard
-@@ -330,12 +391,17 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+@@ -330,12 +398,17 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
       * executes at a time. No-op when unarmed. The thread-local halt env above
       * makes a token pause/resume mid-run safe. */
      yz_lockstep_register(ctx);
@@ -31139,7 +31146,7 @@ index 5fc50208..a5982c8f 100644
          /* A one-way guest stack reset invalidates every lifted host caller.
           * Re-enter its target with the same guest state on the driver stack. */
          ctx->host_depth = 0;
-@@ -350,6 +416,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+@@ -350,6 +423,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
           * returns; the drain loop re-enters each queued target until the SPU
           * halts (stop -> longjmp) or the trampoline empties. Nested brsl/bisl
           * calls drain inside their own call brackets (see the lifter). */
@@ -31147,7 +31154,7 @@ index 5fc50208..a5982c8f 100644
          entry(ctx);
          /* The switch is read once: this runs after every module run, and an
           * uncached getenv here was ~3% of a SPURS workload's SPU time. */
-@@ -363,6 +430,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+@@ -363,6 +437,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
                fflush(stderr); } }
          SPU_DRAIN(ctx);
      }
@@ -31155,7 +31162,7 @@ index 5fc50208..a5982c8f 100644
      yz_lockstep_unregister(ctx);   /* leave the ring; hand the token onward */
      s_spu_halt_armed = outer_armed;
      if (outer_armed) memcpy(s_spu_halt_env, outer_env, sizeof(jmp_buf));
-@@ -558,9 +626,6 @@ extern uint8_t* vm_base;
+@@ -558,9 +633,6 @@ extern uint8_t* vm_base;
   * be written over, and the SPU would never learn the line had changed. Same
   * lock, same critical sections, now shared with the PPU store paths. */
  
@@ -31165,7 +31172,7 @@ index 5fc50208..a5982c8f 100644
  /* PUTLLCs that hit the WATCHED sync line (g_barrier_sync_watch) -- isolates the
   * work-run on the stalled job queue from the dozen idle jobmanager instances. */
  volatile unsigned g_spu_putllc_sync_hit = 0;
-@@ -576,7 +641,232 @@ volatile unsigned g_spu_putllc_sync_hit = 0;
+@@ -576,7 +648,232 @@ volatile unsigned g_spu_putllc_sync_hit = 0;
   * completion. Chosen above the context/descriptor we park near the top of LS. */
  #define SPU_JOB_RETURN_LS   0x3FF00u
  
@@ -31398,7 +31405,7 @@ index 5fc50208..a5982c8f 100644
  static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
  {
      /* Classify FIRST. Every MFC_Cmd write lands here, and only the switch at
-@@ -664,7 +954,8 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -664,7 +961,8 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
          s_aea = e ? (uint32_t)strtoul(e, 0, 16) & ~127u : 0; s_ae = s_aea ? 1 : 0;
          if (s_ae == 1) { extern uint32_t g_barrier_sync_watch;
              g_barrier_sync_watch = s_aea; } /* arm PUTLLC OK/FAIL verdict log */ }
@@ -31408,7 +31415,7 @@ index 5fc50208..a5982c8f 100644
            static int _n = 0, s_cap = -1;
            /* SPU_ATOM_EA_MAX=<n>: lines to print (default 48, 0 = unlimited). */
            if (s_cap < 0) { const char* m = getenv("SPU_ATOM_EA_MAX"); s_cap = m ? atoi(m) : 48; }
-@@ -761,6 +1052,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -761,6 +1059,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
          if (!llar_fast) { ctx->resv_ea = ea; ctx->resv_valid = 1; }   /* the fast path published it already */
          ctx->atomic_stat = 4;
          ctx->dbg_getllar++;
@@ -31416,7 +31423,7 @@ index 5fc50208..a5982c8f 100644
          /* A GETLLAR re-issued millions of times on one line is an SPU spin-wait
           * that nobody is releasing (a ticket lock, a counter barrier). Say so
           * once per line with the line's head, so the stuck word is visible
-@@ -775,6 +1067,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -775,6 +1074,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
                        m[0],m[1],m[2],m[3], m[4],m[5],m[6],m[7], m[8],m[9],m[10],m[11], m[12],m[13],m[14],m[15]);
            } }
          if (!llar_fast) spu_lockline_unlock();
@@ -31424,7 +31431,7 @@ index 5fc50208..a5982c8f 100644
          /* SPU_LLARWATCH=<hex EA>: every GETLLAR of that line, with the LSA it
           * used and the first word as it lands in BOTH places.
           *
-@@ -833,16 +1126,29 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -833,16 +1133,29 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
          return 1;
  
      case MFC_PUTLLC_CMD:
@@ -31457,7 +31464,7 @@ index 5fc50208..a5982c8f 100644
              /* A committing PUTLLC is a line write like any other, so every
               * PEER reservation on it is lost and its SPU takes SPU_EVENT_LR.
               * Silent, this is the same lost update the PPU half was added to
-@@ -926,6 +1232,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -926,6 +1239,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
                fprintf(stderr, "[atom-ea] PUTLLC %s lr=0x%05X ea=0x%08X\n",
                        ctx->atomic_stat ? "FAIL" : "OK",
                        ctx->gpr[0]._u32[0] & SPU_LS_MASK, ea); }
@@ -31465,7 +31472,7 @@ index 5fc50208..a5982c8f 100644
          ctx->resv_valid = 0;                           /* reservation consumed */
          spu_lockline_unlock();
          if (ctx->atomic_stat == 0) {
-@@ -940,6 +1247,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -940,6 +1254,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
          { extern void spu_lockguard_check(spu_context*, uint32_t, const uint8_t*, uint32_t, const char*);
            spu_lockguard_check(ctx, ea, ls, MFC_ATOMIC_LINE, "PUTLLUC"); }
          memcpy(mem, ls, MFC_ATOMIC_LINE);              /* unconditional store */
@@ -31473,7 +31480,7 @@ index 5fc50208..a5982c8f 100644
          /* Unconditional, so it invalidates EVERY reservation on the line --
           * this SPU's included, which is why the notify runs before the
           * bookkeeping below rather than after it. A peer left holding a
-@@ -947,6 +1255,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -947,6 +1262,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
           * has already overwritten. */
          spu_coh_notify_write(ea);
          ctx->resv_valid = 0; ctx->atomic_stat = 2;   /* PUTLLUC complete */
@@ -31481,7 +31488,7 @@ index 5fc50208..a5982c8f 100644
          spu_lockline_unlock();
          spu_taskset_line_committed(ea & ~127u);
          if (g_spu_line_commit_hook) g_spu_line_commit_hook(ea & ~127u);
-@@ -1129,7 +1438,7 @@ static void spu_resv_lost_poll(spu_context* ctx)
+@@ -1129,7 +1445,7 @@ static void spu_resv_lost_poll(spu_context* ctx)
  {
      if (!(ctx->event_mask & 0x400u) || !ctx->resv_valid) return;
      if (!vm_base || ctx->resv_ea == 0) return;
@@ -31490,7 +31497,7 @@ index 5fc50208..a5982c8f 100644
          ctx->resv_valid = 0;
          SPU_EVENT_SET(ctx, 0x400u);
      }
-@@ -1217,6 +1526,124 @@ static void spu_ch_wait(spu_context* ctx, uint32_t channel, const char* op)
+@@ -1217,6 +1533,124 @@ static void spu_ch_wait(spu_context* ctx, uint32_t channel, const char* op)
      ctx->status = SPU_STATUS_RUNNING;
  }
  
@@ -31615,7 +31622,7 @@ index 5fc50208..a5982c8f 100644
  /* ===========================================================================
   * Channel read (returns value in the preferred word slot)
   * ===========================================================================*/
-@@ -1236,8 +1663,10 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
+@@ -1236,8 +1670,10 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
       * park forever. RdInMbox/RdSigNotify park on their PPU producers. */
      if (channel == SPU_RdInMbox || channel == SPU_RdSigNotify1 || channel == SPU_RdSigNotify2)
          spu_ch_wait(ctx, channel, "rdch");
@@ -31628,7 +31635,7 @@ index 5fc50208..a5982c8f 100644
  
      uint32_t v = 0;
  
-@@ -1346,7 +1775,7 @@ uint32_t spu_rchcnt(spu_context* ctx, uint32_t channel)
+@@ -1346,7 +1782,7 @@ uint32_t spu_rchcnt(spu_context* ctx, uint32_t channel)
            lastlsa[sp] = ctx->mfc_lsa & SPU_LS_MASK;
            lastr90[sp] = ctx->gpr[90]._u32[0];
            lastrd[sp] = (ctx->resv_valid && vm_base && ctx->resv_ea)
@@ -31637,7 +31644,7 @@ index 5fc50208..a5982c8f 100644
                       : -1;
            { static int s_ld2 = -2; static uint32_t s_lo2;
              if (s_ld2 == -2) { const char* e5 = getenv("SPU_LSDUMP");
-@@ -1502,7 +1931,13 @@ uint32_t spu_rchcnt(spu_context* ctx, uint32_t channel)
+@@ -1502,7 +1938,13 @@ uint32_t spu_rchcnt(spu_context* ctx, uint32_t channel)
       * handler gates on this (rchcnt $ch25; brz IhcExit) -- returning the old
       * default of 1 made it enter on spurious interrupts with an empty stat,
       * running IhcLoop on a zero mask (clz(0) -> bogus tagId/ack). */
@@ -31652,7 +31659,7 @@ index 5fc50208..a5982c8f 100644
      default:                 return 1;  /* default: channel ready */
      }
  }
-@@ -1516,8 +1951,28 @@ typedef struct {
+@@ -1516,8 +1958,28 @@ typedef struct {
      uint32_t addr;
      spu_fn   fn;
      int      image_id;   /* which recompiled image this function belongs to */
@@ -31681,7 +31688,7 @@ index 5fc50208..a5982c8f 100644
  /* One entry per lifted SPU function across EVERY registered image, and a game
   * that lifts its whole SPU workload set has a lot of them: Yakuza: Dead Souls
   * registers ~170k (cri_audio alone is ~35k, gs_task ~9k, the job binaries ~11k).
-@@ -1539,6 +1994,14 @@ static uint32_t s_registry_count = 0;
+@@ -1539,6 +2001,14 @@ static uint32_t s_registry_count = 0;
   * real entries and the extents mean something. */
  uint32_t spu_registry_size(void) { return s_registry_count; }
  
@@ -31696,7 +31703,7 @@ index 5fc50208..a5982c8f 100644
  int spu_registry_entry(uint32_t i, void** host, uint32_t* ls_addr)
  {
      if (i >= s_registry_count) return 0;
-@@ -1653,6 +2116,7 @@ spu_fn spu_lookup(uint32_t addr, int image_id)   /* exported: clang-built fast-p
+@@ -1653,6 +2123,7 @@ spu_fn spu_lookup(uint32_t addr, int image_id)   /* exported: clang-built fast-p
       * any, for back-compat with single-image contexts. */
      for (uint32_t n = s_hash_head[spu_fn_hash(addr)]; n; n = s_hash_next[n - 1]) {
          const spu_reg_entry* e = &s_registry[n - 1];
@@ -31704,7 +31711,7 @@ index 5fc50208..a5982c8f 100644
          if (e->addr == addr &&
              (image_id == 0 || e->image_id == 0 || e->image_id == image_id)) {
              /* One compare on the return path; the report itself is rare. */
-@@ -1664,6 +2128,335 @@ spu_fn spu_lookup(uint32_t addr, int image_id)   /* exported: clang-built fast-p
+@@ -1664,6 +2135,335 @@ spu_fn spu_lookup(uint32_t addr, int image_id)   /* exported: clang-built fast-p
      return NULL;
  }
  
@@ -32040,7 +32047,7 @@ index 5fc50208..a5982c8f 100644
  /* Indirect dispatch resolves the same (address, image) pairs on every guest
   * indirect branch. Each resolution walks the address's hash chain -- one entry
   * per image registered there, which reaches dozens where streamed job modules
-@@ -1730,12 +2523,21 @@ static spu_lifted_fn spu_lifted_lookup_full(const spu_context* ctx, uint32_t lsa
+@@ -1730,12 +2530,21 @@ static spu_lifted_fn spu_lifted_lookup_full(const spu_context* ctx, uint32_t lsa
               * unverified: other images' functions there would be stale. */
              if (ctx->resident_code[slot].verify_state &&
                  !spu_overlay_resident_verified((spu_context*)ctx, slot)) return NULL;
@@ -32064,7 +32071,7 @@ index 5fc50208..a5982c8f 100644
      return (spu_lifted_fn)fn;
  }
  
-@@ -1791,49 +2593,13 @@ static void spu_dcache_shadow_stats(void)
+@@ -1791,49 +2600,13 @@ static void spu_dcache_shadow_stats(void)
  }
  spu_lifted_fn spu_lifted_lookup(const spu_context* ctx, uint32_t lsa)
  {
@@ -32121,7 +32128,7 @@ index 5fc50208..a5982c8f 100644
  }
  
  /* ---- Swappable code overlays (see spu_context.resident_ovl) --------------
-@@ -2133,6 +2899,15 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -2133,6 +2906,15 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
  {
      uint32_t lsa = (uint32_t)(ls - ctx->ls);
      spu_ovl_dump(ctx, ea, lsa, ls, size);
@@ -32137,7 +32144,7 @@ index 5fc50208..a5982c8f 100644
      for (unsigned slot = 0; slot < 4; ++slot) {
          if (!ctx->resident_code[slot].image_id) continue;
          uint32_t base = ctx->resident_code[slot].lsa;
-@@ -2556,6 +3331,19 @@ static int spu_smc_microstep(spu_context* ctx)
+@@ -2556,6 +3338,19 @@ static int spu_smc_microstep(spu_context* ctx)
           * corroboration gets for a decode bug. */
          if (op11 == 0x1AC || op7 == 0x08 || op7 == 0x09) { pc += 4; continue; } /* hbr/hbra/hbrr */
  
@@ -32157,7 +32164,7 @@ index 5fc50208..a5982c8f 100644
          /* Hand off to the real interpreter rather than giving up.
           *
           * This microstepper knows a dozen opcodes -- enough for the
-@@ -2600,14 +3388,74 @@ static int spu_smc_microstep(spu_context* ctx)
+@@ -2600,14 +3395,74 @@ static int spu_smc_microstep(spu_context* ctx)
      return 0;
  }
  
@@ -32232,7 +32239,7 @@ index 5fc50208..a5982c8f 100644
      /* Interrupt-return register restore (see spu_drain.c spu_irq_regs_save):
       * the WWS handler's save/restore shim lives at unlifted top-of-LS, so we
       * enforce the preserve-all-registers hardware contract here -- the first
-@@ -2813,11 +3661,13 @@ void spu_indirect_branch(spu_context* ctx)
+@@ -2813,11 +3668,13 @@ void spu_indirect_branch(spu_context* ctx)
              uint32_t w = ((uint32_t)ctx->ls[p0] << 24) | ((uint32_t)ctx->ls[p0+1] << 16) |
                           ((uint32_t)ctx->ls[p0+2] << 8) | ctx->ls[p0+3];
              if ((w >> 21) == 0u) {                 /* stop / stopd */
@@ -32246,7 +32253,7 @@ index 5fc50208..a5982c8f 100644
                  spu_halt(ctx);
                  return;
              }
-@@ -3150,13 +4000,14 @@ void spu_indirect_branch(spu_context* ctx)
+@@ -3150,13 +4007,14 @@ void spu_indirect_branch(spu_context* ctx)
       * image (the FMOD mixer's overlay calls) exhaust it and silently hide
       * every other image's misses -- LBP's loading jobs skipped their command
       * handlers for a whole session without a single log line. */
@@ -32262,7 +32269,7 @@ index 5fc50208..a5982c8f 100644
      /* One-shot: the FMOD null-handler DSP node carries a PPU descriptor EA at
       * node+0x14 (observed 0x93C3C0). Dump it to identify which plugin/unit
       * type never got its SPU code streamed (env SPU_DSPDESC=<hex ea>). */
-@@ -3316,4 +4167,43 @@ void spu_trace_rt(spu_context* ctx, uint32_t rt)
+@@ -3316,4 +4174,43 @@ void spu_trace_rt(spu_context* ctx, uint32_t rt)
  
  #ifdef __cplusplus
  }
@@ -33275,6 +33282,557 @@ index 49bc2b94..b3fa9522 100644
  #undef SPU_DRAIN_POP_IRQ
 +#undef SPU_DRAIN_AT_RETURN
  }
+diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
+index f04fda63..0379c23d 100644
+--- a/runtime/spu/spu_helpers.h
++++ b/runtime/spu/spu_helpers.h
+@@ -16,6 +16,25 @@
+ #include "spu_context.h"
+ #include <string.h>
+ #include <math.h>
++#if defined(SPU_FLOAT_FAST)
++/* racacit SPU_FLOAT_FAST: RACiT's own single-precision model (end of this file, from its v0.13
++ * runtime patch). The upstream definitions below compile under spu__exact_* names, unused. */
++#define spu_fa spu__exact_fa
++#define spu_fs spu__exact_fs
++#define spu_fm spu__exact_fm
++#define spu_fma spu__exact_fma
++#define spu_fms spu__exact_fms
++#define spu_fnms spu__exact_fnms
++#define spu_fceq spu__exact_fceq
++#define spu_fcgt spu__exact_fcgt
++#define spu_fcmeq spu__exact_fcmeq
++#define spu_fcmgt spu__exact_fcmgt
++#define spu_fi spu__exact_fi
++#define spu_cflts spu__exact_cflts
++#define spu_cfltu spu__exact_cfltu
++#define spu_csflt spu__exact_csflt
++#define spu_cuflt spu__exact_cuflt
++#endif
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -1888,6 +1907,520 @@ static inline u128 spu_ilh(uint16_t imm) { return spu_splat_u16(imm); }
+ static inline u128 spu_ilhu(uint16_t imm){ return spu_splat_u32((uint32_t)imm << 16); }
+ static inline u128 spu_iohl(u128 a, uint16_t imm){ u128 r; for(int i=0;i<4;i++) r._u32[i]=a._u32[i]|(uint32_t)imm; return r; }
+ 
++#if defined(SPU_FLOAT_FAST)
++/* ===========================================================================
++ * racacit SPU_FLOAT_FAST: SPU single precision as RACiT ran it on ps3recomp v0.13 -- IEEE single
++ * ops four lanes at a time on SPU threads whose MXCSR is DAZ + FTZ + round toward zero
++ * (spu_channels.c spu_csr_spu), so an ordinary result is the SPU's exactly; only lanes with
++ * exponent 255 (an ordinary large number to the SPU, Inf/NaN to IEEE) or an overflow take the
++ * extended-range path in double (spu_xf_get/put). Copied as it was from RACiT's v0.13 patch.
++ * ps3recomp v0.16+ computes every op exactly in integer/double arithmetic instead: the crate and
++ * debris physics job ran 30 ms a frame in fights, half of it in float ops. Plain IEEE floats
++ * are not an option: the game keeps exponent-255 values in its joint matrices (Ratchet
++ * invisible and frozen). RACACIT_SPU_FLOAT_FAST=OFF (game/CMakeLists.txt) builds upstream's.
++ * =========================================================================*/
++#undef spu_fa
++#undef spu_fs
++#undef spu_fm
++#undef spu_fma
++#undef spu_fms
++#undef spu_fnms
++#undef spu_fceq
++#undef spu_fcgt
++#undef spu_fcmeq
++#undef spu_fcmgt
++#undef spu_fi
++#undef spu_cflts
++#undef spu_cfltu
++#undef spu_csflt
++#undef spu_cuflt
++/* ---- SPU single precision is not IEEE (CBEA SPU ISA 9.1) ----
++ * No NaN or Inf: biased exponent 255 is an ordinary exponent, so the range
++ * reaches 2^129 (0x7FFFFFFF ~ 6.8e38). Results round toward zero, saturate to
++ * +/-0x7FFFFFFF on overflow and become zero below 2^-126; denormal operands
++ * are zero. Taken as IEEE floats, every exponent-255 value is a NaN and
++ * poisons whatever touches it, where the SPU would have got a number -- and
++ * games rely on it: 1/0 (frest+fi of a zero) is the largest number, and that
++ * times zero is zero. A Crack in Time's animation job leaves such values in
++ * the unused column of Ratchet's joint matrices; its bounds job multiplies
++ * them by zero once he moves, got NaN here, and the hero collapsed to a sliver
++ * and stopped moving. Operands are decoded to double (exact), computed there,
++ * and encoded back with the SPU's rules -- integer work, no libm. */
++static inline double spu_xf_get(uint32_t b)
++{
++    uint64_t e = (b >> 23) & 0xFFu, u = (uint64_t)(b & 0x80000000u) << 32;
++    if (e) u |= ((e + 896u) << 52) | ((uint64_t)(b & 0x7FFFFFu) << 29);   /* 1023 - 127 */
++    double d; memcpy(&d, &u, sizeof d); return d;   /* exponent 0: a signed zero */
++}
++static inline uint32_t spu_xf_put(double d)
++{
++    uint64_t u; memcpy(&u, &d, sizeof u);
++    const uint32_t s = (uint32_t)(u >> 32) & 0x80000000u;
++    const int64_t e = (int64_t)((u >> 52) & 0x7FFu) - 896;   /* single-biased */
++    if (e <= 0) return s;                                      /* zero, underflow */
++    if (e > 255) return s | 0x7FFFFFFFu;                       /* saturate (and inf) */
++    return s | ((uint32_t)e << 23) | ((uint32_t)(u >> 29) & 0x7FFFFFu);   /* truncate */
++}
++/* Fast path: lanes that are neither denormal nor exponent 255 -- operands and
++ * result -- mean the same number to the SPU as to IEEE, so the plain float
++ * result stands (rounded to nearest where the SPU truncates: one ulp, as
++ * before). Only the rest take the exact path; doing every lane exactly cost
++ * Zolar Forest a third of its frame rate. */
++static inline uint32_t spu_xf_plain(uint32_t b)
++{
++    const uint32_t e = b & 0x7F800000u;
++    return (uint32_t)(e != 0x7F800000u) & ((uint32_t)(e != 0u) | (uint32_t)!(b & 0x7FFFFFu));
++}
++static inline uint32_t spu_xf_plain4(u128 a)
++{
++    return spu_xf_plain(a._u32[0]) & spu_xf_plain(a._u32[1]) & spu_xf_plain(a._u32[2]) & spu_xf_plain(a._u32[3]);
++}
++#define SPU_XF_ARITH2(name, OP) \
++    static inline u128 name(u128 a, u128 b) { u128 r; \
++        for (int i = 0; i < 4; i++) r._f32[i] = a._f32[i] OP b._f32[i]; \
++        if (spu_xf_plain4(a) & spu_xf_plain4(b) & spu_xf_plain4(r)) return r; \
++        for (int i = 0; i < 4; i++) r._u32[i] = spu_xf_put(spu_xf_get(a._u32[i]) OP spu_xf_get(b._u32[i])); \
++        return r; }
++#define SPU_XF_CMP2(name, F) \
++    static inline u128 name(u128 a, u128 b) { u128 r; \
++        if (spu_xf_plain4(a) & spu_xf_plain4(b)) { \
++            for (int i = 0; i < 4; i++) { const float x = a._f32[i], y = b._f32[i]; r._u32[i] = (F) ? 0xFFFFFFFFu : 0u; } \
++            return r; } \
++        for (int i = 0; i < 4; i++) { const double x = spu_xf_get(a._u32[i]), y = spu_xf_get(b._u32[i]); \
++            r._u32[i] = (F) ? 0xFFFFFFFFu : 0u; } \
++        return r; }
++#define SPU_XF_FMA(name, EXPR) \
++    static inline u128 name(u128 a, u128 b, u128 c) { u128 r; \
++        for (int i = 0; i < 4; i++) { const double x = a._f32[i], y = b._f32[i], z = c._f32[i]; r._f32[i] = (float)(EXPR); } \
++        if (spu_xf_plain4(a) & spu_xf_plain4(b) & spu_xf_plain4(c) & spu_xf_plain4(r)) return r; \
++        for (int i = 0; i < 4; i++) { const double x = spu_xf_get(a._u32[i]), y = spu_xf_get(b._u32[i]), \
++            z = spu_xf_get(c._u32[i]); r._u32[i] = spu_xf_put(EXPR); } \
++        return r; }
++
++/* FI decodes the base and step fields produced by the hardware estimate
++ * instructions; its second operand is not an ordinary reciprocal float. The
++ * base is an extended-range number: frest of zero gives 0x7FFFFFFF, whose
++ * base 0x7FFFFC00 the IEEE version turned into a NaN. */
++extern volatile long g_spu_xf_exact[8];   /* SPU_XF_STATS: exact-path calls (spu_drain.c) */
++/* ...counted only with SPU_XF_STATS set: every lane bumping one shared line on
++ * each extended-range op (millions a second in fights) bounced it between
++ * cores for a report nobody asked for. A read of a flag that is never
++ * written stays in every core's cache. */
++extern int g_spu_xf_stats_on;
++#define SPU_XF_COUNT(k) do { if (__builtin_expect(g_spu_xf_stats_on, 0)) g_spu_xf_exact[k]++; } while (0)
++static inline __attribute__((noinline)) u128 spu_fi_exact(u128 a, u128 b) {
++    u128 r; SPU_XF_COUNT(3);
++    for (int i = 0; i < 4; i++) {
++        uint32_t rb = b._u32[i];
++        uint32_t ra = a._u32[i];
++        uint32_t exp = (rb >> 23) & 0xFFu;
++        double base = spu_xf_get(rb & 0xFFFFFC00u);
++        double step = ldexp((double)(rb & 0x3FFu), (int)exp - 127 - 13);
++        if (base < 0.0) step = -step;
++        double y = ldexp((double)(ra & 0x7FFFFu), -19);
++        r._u32[i] = spu_xf_put(base - step * y);
++    }
++    return r;
++}
++
++#if !(defined(__SSE2__) || defined(_M_X64))
++static inline u128 spu_fi(u128 a, u128 b) { return spu_fi_exact(a, b); }
++#endif
++
++/* ---- single-precision float (4 lanes) ---- */
++/* Extended-range single precision throughout (spu_xf_get/put above). A
++ * product of two singles is exact in double, so fm is exact before the
++ * truncation; fa/fs/fma round once in double first, which differs from the
++ * SPU only in rare double-rounding cases. */
++#if defined(__SSE2__) || defined(_M_X64)
++/* x86: the same results four lanes at a time (IEEE single ops for the fast
++ * path, the plain-lane test as integer compares); the exact path is shared. */
++#include <emmintrin.h>
++static inline __attribute__((always_inline)) int spu_xf_plain_v(__m128i v)
++{
++    const __m128i e = _mm_and_si128(v, _mm_set1_epi32(0x7F800000));
++    const __m128i m = _mm_and_si128(v, _mm_set1_epi32(0x007FFFFF));
++    const __m128i z = _mm_setzero_si128();
++    const __m128i bad = _mm_or_si128(_mm_cmpeq_epi32(e, _mm_set1_epi32(0x7F800000)),
++                                     _mm_andnot_si128(_mm_cmpeq_epi32(m, z), _mm_cmpeq_epi32(e, z)));
++    return _mm_movemask_epi8(bad) == 0;
++}
++/* SPU code runs with DAZ and FTZ set (spu_run_with_halt): denormal operands
++ * read as zero and denormal results flush to zero, exactly as on the SPU.
++ * What is left to tell the two apart is exponent 255 -- a large finite number
++ * to the SPU, Inf/NaN to IEEE -- and an IEEE operation turns any such operand
++ * (and any overflow) into an exponent-255 result. So arithmetic checks only
++ * its result, compares only their operands: a few instructions where the
++ * full test of every operand was most of a float op's cost. The rounding
++ * mode is toward zero there too, so the fast results are the SPU's exactly. */
++static inline __attribute__((always_inline)) int spu_xf_e255_v(__m128i v)
++{
++    const __m128i e = _mm_set1_epi32(0x7F800000);
++    return _mm_movemask_epi8(_mm_cmpeq_epi32(_mm_and_si128(v, e), e)) != 0;
++}
++#if defined(__AVX2__)
++#include <immintrin.h>
++/* spu_xf_get / spu_xf_put four lanes at a time (AVX2): the extended-range
++ * path without a scalar loop or a call. Same double arithmetic, same rounding
++ * mode, so the same results -- it is what the exact paths below run when a
++ * vector has an exponent-255 lane or overflows, which some jobs do millions
++ * of times a second (frest(0) = 0x7FFFFFFF in a padding lane). */
++static inline __attribute__((always_inline)) __m256d spu_xf_get4(__m128i v)
++{
++    const __m256i u = _mm256_cvtepu32_epi64(v);
++    const __m256i e = _mm256_and_si256(_mm256_srli_epi64(u, 23), _mm256_set1_epi64x(0xFF));
++    const __m256i sign = _mm256_slli_epi64(_mm256_and_si256(u, _mm256_set1_epi64x(0x80000000)), 32);
++    const __m256i bits = _mm256_or_si256(_mm256_or_si256(sign,
++        _mm256_slli_epi64(_mm256_add_epi64(e, _mm256_set1_epi64x(896)), 52)),
++        _mm256_slli_epi64(_mm256_and_si256(u, _mm256_set1_epi64x(0x7FFFFF)), 29));
++    return _mm256_castsi256_pd(_mm256_blendv_epi8(bits, sign, _mm256_cmpeq_epi64(e, _mm256_setzero_si256())));
++}
++static inline __attribute__((always_inline)) __m128i spu_xf_put4(__m256d d)
++{
++    const __m256i u = _mm256_castpd_si256(d);
++    const __m256i sign = _mm256_and_si256(_mm256_srli_epi64(u, 32), _mm256_set1_epi64x(0x80000000));
++    const __m256i e = _mm256_sub_epi64(_mm256_and_si256(_mm256_srli_epi64(u, 52), _mm256_set1_epi64x(0x7FF)),
++                                       _mm256_set1_epi64x(896));
++    __m256i r = _mm256_or_si256(_mm256_or_si256(sign, _mm256_slli_epi64(e, 23)),
++                                _mm256_and_si256(_mm256_srli_epi64(u, 29), _mm256_set1_epi64x(0x7FFFFF)));
++    r = _mm256_blendv_epi8(r, sign, _mm256_cmpgt_epi64(_mm256_set1_epi64x(1), e));               /* e <= 0 */
++    r = _mm256_blendv_epi8(r, _mm256_or_si256(sign, _mm256_set1_epi64x(0x7FFFFFFF)),
++                           _mm256_cmpgt_epi64(e, _mm256_set1_epi64x(255)));                       /* e > 255 */
++    return _mm256_castsi256_si128(_mm256_permutevar8x32_epi32(r, _mm256_setr_epi32(0, 2, 4, 6, 0, 2, 4, 6)));
++}
++#endif
++/* A result to redo exactly: exponent 255, or +-FLT_MAX -- with rounding toward
++ * zero (as the SPU rounds) an IEEE overflow lands there instead of on Inf. */
++static inline __attribute__((always_inline)) int spu_xf_bad_v(__m128i v)
++{
++    const __m128i ab = _mm_and_si128(v, _mm_set1_epi32(0x7FFFFFFF));
++    return _mm_movemask_epi8(_mm_cmpgt_epi32(ab, _mm_set1_epi32(0x7F7FFFFE))) != 0;
++}
++
++#if defined(__AVX2__)
++#include <immintrin.h>
++/* The same arithmetic four lanes at a time in double: base is b with its low
++ * ten bits cleared (DAZ reads exponent 0 as a signed zero, as spu_xf_get
++ * does), step = (b & 0x3FF) * 2^(exp-140) built from its exponent, y =
++ * (a & 0x7FFFF) * 2^-19; base - step*y rounds toward zero to single (the SPU
++ * mode). b with exponent 255, or a result at FLT_MAX or beyond, goes exact. */
++static inline __attribute__((always_inline)) u128 spu_fi(u128 a, u128 b) {
++    const __m128i va = _mm_loadu_si128((const __m128i*)a._u32), vb = _mm_loadu_si128((const __m128i*)b._u32);
++    if (__builtin_expect(!spu_xf_e255_v(vb), 1)) {
++        const __m256d base = _mm256_cvtps_pd(_mm_castsi128_ps(_mm_and_si128(vb, _mm_set1_epi32((int)0xFFFFFC00u))));
++        const __m128i ex = _mm_and_si128(_mm_srli_epi32(vb, 23), _mm_set1_epi32(0xFF));
++        const __m256d p2 = _mm256_castsi256_pd(_mm256_slli_epi64(
++            _mm256_add_epi64(_mm256_cvtepu32_epi64(ex), _mm256_set1_epi64x(1023 - 140)), 52));
++        __m256d step = _mm256_mul_pd(_mm256_cvtepi32_pd(_mm_and_si128(vb, _mm_set1_epi32(0x3FF))), p2);
++        const __m256d neg = _mm256_cmp_pd(base, _mm256_setzero_pd(), _CMP_LT_OQ);
++        step = _mm256_blendv_pd(step, _mm256_sub_pd(_mm256_setzero_pd(), step), neg);
++        const __m256d y = _mm256_mul_pd(_mm256_cvtepi32_pd(_mm_and_si128(va, _mm_set1_epi32(0x7FFFF))),
++                                        _mm256_set1_pd(1.0 / 524288.0));
++        const __m128 vr = _mm256_cvtpd_ps(_mm256_sub_pd(base, _mm256_mul_pd(step, y)));
++        if (__builtin_expect(!spu_xf_bad_v(_mm_castps_si128(vr)), 1)) { u128 r; _mm_storeu_ps(r._f32, vr); return r; }
++    }
++    {   /* extended range: base decoded the SPU's way, result encoded likewise */
++        SPU_XF_COUNT(7);
++        const __m256d base = spu_xf_get4(_mm_and_si128(vb, _mm_set1_epi32((int)0xFFFFFC00u)));
++        const __m128i ex = _mm_and_si128(_mm_srli_epi32(vb, 23), _mm_set1_epi32(0xFF));
++        const __m256d p2 = _mm256_castsi256_pd(_mm256_slli_epi64(
++            _mm256_add_epi64(_mm256_cvtepu32_epi64(ex), _mm256_set1_epi64x(1023 - 140)), 52));
++        __m256d step = _mm256_mul_pd(_mm256_cvtepi32_pd(_mm_and_si128(vb, _mm_set1_epi32(0x3FF))), p2);
++        const __m256d neg = _mm256_cmp_pd(base, _mm256_setzero_pd(), _CMP_LT_OQ);
++        step = _mm256_blendv_pd(step, _mm256_sub_pd(_mm256_setzero_pd(), step), neg);
++        const __m256d y = _mm256_mul_pd(_mm256_cvtepi32_pd(_mm_and_si128(va, _mm_set1_epi32(0x7FFFF))),
++                                        _mm256_set1_pd(1.0 / 524288.0));
++        u128 r; _mm_storeu_si128((__m128i*)r._u32, spu_xf_put4(_mm256_sub_pd(base, _mm256_mul_pd(step, y))));
++        return r;
++    }
++}
++#else
++static inline u128 spu_fi(u128 a, u128 b) { return spu_fi_exact(a, b); }
++#endif
++/* The fast path inlined (a call passes and returns every u128 through memory
++ * on Win64); lanes the SPU treats differently from IEEE take the exact path
++ * out of line. */
++#if defined(__AVX2__)
++#define SPU_XF_EXT2(name, V256) \
++        { SPU_XF_COUNT(5); const __m256d x = spu_xf_get4(_mm_castps_si128(va)), y = spu_xf_get4(_mm_castps_si128(vb)); \
++          _mm_storeu_si128((__m128i*)r._u32, spu_xf_put4(V256)); return r; }
++#else
++#define SPU_XF_EXT2(name, V256) return name##_exact(a, b);
++#endif
++#define SPU_XF_ARITH2_V(name, OP, VOP, V256) \
++    static inline __attribute__((noinline)) u128 name##_exact(u128 a, u128 b) { u128 r; SPU_XF_COUNT(0); \
++        for (int i = 0; i < 4; i++) r._u32[i] = spu_xf_put(spu_xf_get(a._u32[i]) OP spu_xf_get(b._u32[i])); \
++        return r; } \
++    static inline __attribute__((always_inline)) u128 name(u128 a, u128 b) { u128 r; \
++        const __m128 va = _mm_loadu_ps(a._f32), vb = _mm_loadu_ps(b._f32), vr = VOP(va, vb); \
++        _mm_storeu_ps(r._f32, vr); \
++        if (__builtin_expect(!spu_xf_bad_v(_mm_castps_si128(vr)), 1)) return r; \
++        SPU_XF_EXT2(name, V256) }
++SPU_XF_ARITH2_V(spu_fa, +, _mm_add_ps, _mm256_add_pd(x, y))
++SPU_XF_ARITH2_V(spu_fs, -, _mm_sub_ps, _mm256_sub_pd(x, y))
++SPU_XF_ARITH2_V(spu_fm, *, _mm_mul_ps, _mm256_mul_pd(x, y))
++#elif defined(__aarch64__)
++/* NEON, with the FPCR set as MXCSR is on x86 (spu_run_with_halt: flush to
++ * zero, round toward zero): the IEEE op is the SPU's result unless it comes
++ * out at exponent 255 or +-FLT_MAX, which go exact. */
++#include <arm_neon.h>
++static inline __attribute__((always_inline)) int spu_xf_e255_n(uint32x4_t v)
++{
++    const uint32x4_t e = vdupq_n_u32(0x7F800000u);
++    return vmaxvq_u32(vceqq_u32(vandq_u32(v, e), e)) != 0;
++}
++static inline __attribute__((always_inline)) int spu_xf_bad_n(uint32x4_t v)
++{
++    return vmaxvq_u32(vcgtq_u32(vandq_u32(v, vdupq_n_u32(0x7FFFFFFFu)), vdupq_n_u32(0x7F7FFFFEu))) != 0;
++}
++#define SPU_XF_ARITH2_N(name, OP, NOP) \
++    static inline __attribute__((noinline)) u128 name##_exact(u128 a, u128 b) { u128 r; SPU_XF_COUNT(0); \
++        for (int i = 0; i < 4; i++) r._u32[i] = spu_xf_put(spu_xf_get(a._u32[i]) OP spu_xf_get(b._u32[i])); \
++        return r; } \
++    static inline __attribute__((always_inline)) u128 name(u128 a, u128 b) { u128 r; \
++        const float32x4_t vr = NOP(vld1q_f32(a._f32), vld1q_f32(b._f32)); \
++        vst1q_f32(r._f32, vr); \
++        if (__builtin_expect(!spu_xf_bad_n(vreinterpretq_u32_f32(vr)), 1)) return r; \
++        return name##_exact(a, b); }
++SPU_XF_ARITH2_N(spu_fa, +, vaddq_f32)
++SPU_XF_ARITH2_N(spu_fs, -, vsubq_f32)
++SPU_XF_ARITH2_N(spu_fm, *, vmulq_f32)
++#else
++SPU_XF_ARITH2(spu_fa, +)
++SPU_XF_ARITH2(spu_fs, -)
++SPU_XF_ARITH2(spu_fm, *)
++#endif
++#if defined(__SSE2__) || defined(_M_X64)
++/* Compares four lanes at a time when every lane is a normal float or a zero
++ * (where IEEE and the SPU agree); the scalar extended-range path otherwise. */
++SPU_XF_CMP2(spu_fceq_exact, x == y)
++SPU_XF_CMP2(spu_fcgt_exact, x > y)
++static inline __attribute__((always_inline)) u128 spu_fceq(u128 a, u128 b) {
++    const __m128 va = _mm_loadu_ps(a._f32), vb = _mm_loadu_ps(b._f32);
++    if (__builtin_expect(!spu_xf_e255_v(_mm_castps_si128(va)) & !spu_xf_e255_v(_mm_castps_si128(vb)), 1)) {
++        u128 r; _mm_storeu_ps(r._f32, _mm_cmpeq_ps(va, vb)); return r; }
++    return spu_fceq_exact(a, b); }
++static inline __attribute__((always_inline)) u128 spu_fcgt(u128 a, u128 b) {
++    const __m128 va = _mm_loadu_ps(a._f32), vb = _mm_loadu_ps(b._f32);
++    if (__builtin_expect(!spu_xf_e255_v(_mm_castps_si128(va)) & !spu_xf_e255_v(_mm_castps_si128(vb)), 1)) {
++        u128 r; _mm_storeu_ps(r._f32, _mm_cmpgt_ps(va, vb)); return r; }
++    return spu_fcgt_exact(a, b); }
++#elif defined(__aarch64__)
++SPU_XF_CMP2(spu_fceq_exact, x == y)
++SPU_XF_CMP2(spu_fcgt_exact, x > y)
++static inline __attribute__((always_inline)) u128 spu_fceq(u128 a, u128 b) {
++    const uint32x4_t ia = vld1q_u32(a._u32), ib = vld1q_u32(b._u32);
++    if (__builtin_expect(!spu_xf_e255_n(ia) & !spu_xf_e255_n(ib), 1)) {
++        u128 r; vst1q_u32(r._u32, vceqq_f32(vreinterpretq_f32_u32(ia), vreinterpretq_f32_u32(ib))); return r; }
++    return spu_fceq_exact(a, b); }
++static inline __attribute__((always_inline)) u128 spu_fcgt(u128 a, u128 b) {
++    const uint32x4_t ia = vld1q_u32(a._u32), ib = vld1q_u32(b._u32);
++    if (__builtin_expect(!spu_xf_e255_n(ia) & !spu_xf_e255_n(ib), 1)) {
++        u128 r; vst1q_u32(r._u32, vcgtq_f32(vreinterpretq_f32_u32(ia), vreinterpretq_f32_u32(ib))); return r; }
++    return spu_fcgt_exact(a, b); }
++#else
++SPU_XF_CMP2(spu_fceq, x == y)
++SPU_XF_CMP2(spu_fcgt, x > y)
++#endif
++
++/* RI8 scale: float-to-int uses 2^(173-i8), int-to-float 2^(i8-155).
++ * The canonical immediates 173 and 155 are identity conversions. Int to
++ * float truncates, like every SPU single-precision result. */
++/* 2^n as a double, built from its exponent (exactly exp2(n) for the RI8
++ * range, -255..255): exp2() per instruction was a libm call in hot loops. */
++static inline double spu_pow2i(int n)
++{
++    if (n < -1022 || n > 1023) return exp2((double)n);
++    const uint64_t u = (uint64_t)(n + 1023) << 52;
++    double d; memcpy(&d, &u, sizeof d); return d;
++}
++static inline u128 spu_cflts_exact(u128 a, int i8){ u128 r; SPU_XF_COUNT(4); double f=spu_pow2i(173-i8);
++    for(int i=0;i<4;i++){ double v=spu_xf_get(a._u32[i])*f; if(v>2147483647.0)v=2147483647.0; if(v<-2147483648.0)v=-2147483648.0; r._s32[i]=(int32_t)v; } return r; }
++static inline u128 spu_cfltu_exact(u128 a, int i8){ u128 r; SPU_XF_COUNT(4); double f=spu_pow2i(173-i8);
++    for(int i=0;i<4;i++){ double v=spu_xf_get(a._u32[i])*f; if(v<0)v=0; if(v>4294967295.0)v=4294967295.0; r._u32[i]=(uint32_t)v; } return r; }
++#if defined(__AVX2__)
++/* Float to integer four lanes at a time: the scale is a power of two (exact
++ * in double), then the same clamps and truncation. Exponent 255 goes exact. */
++static inline __attribute__((always_inline)) u128 spu_cflts(u128 a, int i8) {
++    const __m128i va = _mm_loadu_si128((const __m128i*)a._u32);
++    if (__builtin_expect(spu_xf_e255_v(va), 0)) return spu_cflts_exact(a, i8);
++    __m256d v = _mm256_mul_pd(_mm256_cvtps_pd(_mm_castsi128_ps(va)), _mm256_set1_pd(spu_pow2i(173 - i8)));
++    v = _mm256_min_pd(_mm256_max_pd(v, _mm256_set1_pd(-2147483648.0)), _mm256_set1_pd(2147483647.0));
++    u128 r; _mm_storeu_si128((__m128i*)r._u32, _mm256_cvttpd_epi32(v)); return r; }
++static inline __attribute__((always_inline)) u128 spu_cfltu(u128 a, int i8) {
++    const __m128i va = _mm_loadu_si128((const __m128i*)a._u32);
++    if (__builtin_expect(spu_xf_e255_v(va), 0)) return spu_cfltu_exact(a, i8);
++    __m256d v = _mm256_mul_pd(_mm256_cvtps_pd(_mm_castsi128_ps(va)), _mm256_set1_pd(spu_pow2i(173 - i8)));
++    v = _mm256_floor_pd(_mm256_min_pd(_mm256_max_pd(v, _mm256_setzero_pd()), _mm256_set1_pd(4294967295.0)));
++    const __m128i t = _mm256_cvttpd_epi32(_mm256_sub_pd(v, _mm256_set1_pd(2147483648.0)));
++    u128 r; _mm_storeu_si128((__m128i*)r._u32, _mm_xor_si128(t, _mm_set1_epi32((int)0x80000000u))); return r; }
++#else
++static inline u128 spu_cflts(u128 a, int i8) { return spu_cflts_exact(a, i8); }
++static inline u128 spu_cfltu(u128 a, int i8) { return spu_cfltu_exact(a, i8); }
++#endif
++static inline u128 spu_csflt_exact(u128 a, int i8){ u128 r; double f=spu_pow2i(i8-155);
++    for(int i=0;i<4;i++) r._u32[i]=spu_xf_put((double)a._s32[i]*f); return r; }
++static inline u128 spu_cuflt_exact(u128 a, int i8){ u128 r; double f=spu_pow2i(i8-155);
++    for(int i=0;i<4;i++) r._u32[i]=spu_xf_put((double)a._u32[i]*f); return r; }
++#if defined(__SSE2__) || defined(_M_X64)
++/* Integers below 2^24 convert exactly, and the scale is a power of two, so
++ * the product is exact too unless it leaves the normal range: then no
++ * rounding mode matters and the SPU's truncation is the IEEE result. Any
++ * other lane takes the exact path. */
++static inline __attribute__((always_inline)) u128 spu_xf_int_scale(__m128i v, int i8, int is_unsigned, u128 a) {
++    (void)a;
++    const __m128i lim = _mm_set1_epi32(1 << 24);
++    __m128i big;
++    if (is_unsigned) big = _mm_or_si128(_mm_cmpgt_epi32(v, _mm_set1_epi32((1 << 24) - 1)), _mm_cmplt_epi32(v, _mm_setzero_si128()));
++    else big = _mm_or_si128(_mm_cmpgt_epi32(v, _mm_sub_epi32(lim, _mm_set1_epi32(1))),
++                            _mm_cmplt_epi32(v, _mm_sub_epi32(_mm_setzero_si128(), lim)));
++    u128 r;
++    if (_mm_movemask_epi8(big) != 0 || i8 - 155 < -126 || i8 - 155 > 127) { r._u32[0] = 0xFFFFFFFFu; r._u32[1] = 1u; return r; }
++    const __m128 sc = _mm_castsi128_ps(_mm_set1_epi32((i8 - 155 + 127) << 23));
++    const __m128 vr = _mm_mul_ps(_mm_cvtepi32_ps(v), sc);
++    if (!spu_xf_plain_v(_mm_castps_si128(vr))) { r._u32[0] = 0xFFFFFFFFu; r._u32[1] = 1u; return r; }
++    _mm_storeu_ps(r._f32, vr); return r; }
++#if defined(__AVX2__)
++/* Integers of 2^24 and up, which the path above gives to the exact one, a lane at a
++ * time: common in the game's skinning jobs (4% of a busy lane). Through doubles, as
++ * the exact path does, all four at once: the int and the power of two are exact in a
++ * double, the narrowing rounds to nearest, and a lane that rounded away from zero
++ * steps back one (the SPU truncates). A result outside the plain normal range still
++ * goes the exact way. */
++static inline __attribute__((always_inline)) int spu_xf_wide(__m256d d, u128* r) {
++    const __m128 f = _mm256_cvtpd_ps(d);
++    const __m256d back = _mm256_cvtps_pd(f);
++    const __m256d absm = _mm256_castsi256_pd(_mm256_set1_epi64x(0x7FFFFFFFFFFFFFFFLL));
++    const __m256i over = _mm256_castpd_si256(_mm256_cmp_pd(_mm256_and_pd(back, absm), _mm256_and_pd(d, absm), _CMP_GT_OQ));
++    const __m128i low = _mm256_castsi256_si128(_mm256_permutevar8x32_epi32(over, _mm256_setr_epi32(0, 2, 4, 6, 0, 2, 4, 6)));
++    const __m128i bits = _mm_add_epi32(_mm_castps_si128(f), low);   /* -1 where it went over */
++    if (!spu_xf_plain_v(_mm_castps_si128(f)) || !spu_xf_plain_v(bits)) return 0;
++    _mm_storeu_si128((__m128i*)r->_u32, bits);
++    return 1; }
++#endif
++static inline __attribute__((always_inline)) u128 spu_csflt(u128 a, int i8) {
++    const u128 r = spu_xf_int_scale(_mm_loadu_si128((const __m128i*)a._u32), i8, 0, a);
++    /* the miss marker is a NaN pattern, which a plain result can never be */
++    if (__builtin_expect(!(r._u32[0] == 0xFFFFFFFFu && r._u32[1] == 1u), 1)) return r;
++#if defined(__AVX2__)
++    if (i8 - 155 >= -126 && i8 - 155 <= 127) {
++        u128 w;
++        const __m256d d = _mm256_mul_pd(_mm256_cvtepi32_pd(_mm_loadu_si128((const __m128i*)a._u32)), _mm256_set1_pd(spu_pow2i(i8 - 155)));
++        if (spu_xf_wide(d, &w)) return w;
++    }
++#endif
++    return spu_csflt_exact(a, i8); }
++static inline __attribute__((always_inline)) u128 spu_cuflt(u128 a, int i8) {
++    const u128 r = spu_xf_int_scale(_mm_loadu_si128((const __m128i*)a._u32), i8, 1, a);
++    if (__builtin_expect(!(r._u32[0] == 0xFFFFFFFFu && r._u32[1] == 1u), 1)) return r;
++    return spu_cuflt_exact(a, i8); }
++#else
++static inline u128 spu_csflt(u128 a, int i8) { return spu_csflt_exact(a, i8); }
++static inline u128 spu_cuflt(u128 a, int i8) { return spu_cuflt_exact(a, i8); }
++#endif
++/* Fused multiply-add: the product is exact in double, the sum rounds once
++ * there, then the SPU truncation. */
++#if defined(__SSE2__) || defined(_M_X64)
++/* Two lanes per double op: the same double arithmetic as the scalar form. */
++/* The four lanes in double: one 256-bit pass with AVX, two 128-bit passes
++ * otherwise -- the same arithmetic. x, y, z are the operands as doubles.
++ *
++ * With FMA3, one native single-precision fused op instead. SPU code runs
++ * with round-toward-zero (and DAZ/FTZ), and truncating to double and then
++ * to single is truncating once, so the double form computes the exactly
++ * rounded fused result -- what vfmadd/vfmsub/vfnmadd give directly. Checked
++ * bit-exact, the fast/exact path choice included, on 180M cases per op
++ * (random, denormal, exponent-255, FLT_MAX, near-cancelling c = -a*b). The
++ * double form was a ~20-cycle convert/mul/add/convert chain per op in the
++ * collision jobs' dot products, which the main thread waits on. */
++#if defined(__FMA__)
++#include <immintrin.h>
++#define SPU_XF_FMA_BODY(VEXPR, V256, NATIVE) \
++        const __m128 vr = NATIVE;
++#elif defined(__AVX__)
++#include <immintrin.h>
++#define SPU_XF_FMA_BODY(VEXPR, V256, NATIVE) \
++        const __m256d x = _mm256_cvtps_pd(va), y = _mm256_cvtps_pd(vb), z = _mm256_cvtps_pd(vc); \
++        const __m128 vr = _mm256_cvtpd_ps(V256);
++#else
++#define SPU_XF_FMA_BODY(VEXPR, V256, NATIVE) \
++        __m128d x = _mm_cvtps_pd(va), y = _mm_cvtps_pd(vb), z = _mm_cvtps_pd(vc); \
++        const __m128 lo = _mm_cvtpd_ps(VEXPR); \
++        x = _mm_cvtps_pd(_mm_movehl_ps(va, va)); y = _mm_cvtps_pd(_mm_movehl_ps(vb, vb)); \
++        z = _mm_cvtps_pd(_mm_movehl_ps(vc, vc)); \
++        const __m128 vr = _mm_movelh_ps(lo, _mm_cvtpd_ps(VEXPR));
++#endif
++#if defined(__AVX2__)
++#define SPU_XF_EXT3(name, V256) \
++        { SPU_XF_COUNT(6); const __m256d x = spu_xf_get4(_mm_castps_si128(va)), y = spu_xf_get4(_mm_castps_si128(vb)), \
++                         z = spu_xf_get4(_mm_castps_si128(vc)); \
++          _mm_storeu_si128((__m128i*)r._u32, spu_xf_put4(V256)); return r; }
++#else
++#define SPU_XF_EXT3(name, V256) return name##_exact(a, b, c);
++#endif
++#define SPU_XF_FMA_V(name, EXPR, VEXPR, V256, NATIVE) \
++    static inline __attribute__((noinline)) u128 name##_exact(u128 a, u128 b, u128 c) { u128 r; SPU_XF_COUNT(1); \
++        for (int i = 0; i < 4; i++) { const double x = spu_xf_get(a._u32[i]), y = spu_xf_get(b._u32[i]), \
++            z = spu_xf_get(c._u32[i]); r._u32[i] = spu_xf_put(EXPR); } \
++        return r; } \
++    static inline __attribute__((always_inline)) u128 name(u128 a, u128 b, u128 c) { u128 r; \
++        const __m128 va = _mm_loadu_ps(a._f32), vb = _mm_loadu_ps(b._f32), vc = _mm_loadu_ps(c._f32); \
++        SPU_XF_FMA_BODY(VEXPR, V256, NATIVE) \
++        _mm_storeu_ps(r._f32, vr); \
++        if (__builtin_expect(!spu_xf_bad_v(_mm_castps_si128(vr)), 1)) return r; \
++        SPU_XF_EXT3(name, V256) }
++SPU_XF_FMA_V(spu_fma, x * y + z, _mm_add_pd(_mm_mul_pd(x, y), z), _mm256_add_pd(_mm256_mul_pd(x, y), z),
++             _mm_fmadd_ps(va, vb, vc))
++SPU_XF_FMA_V(spu_fms, x * y - z, _mm_sub_pd(_mm_mul_pd(x, y), z), _mm256_sub_pd(_mm256_mul_pd(x, y), z),
++             _mm_fmsub_ps(va, vb, vc))
++SPU_XF_FMA_V(spu_fnms, z - x * y, _mm_sub_pd(z, _mm_mul_pd(x, y)), _mm256_sub_pd(z, _mm256_mul_pd(x, y)),
++             _mm_fnmadd_ps(va, vb, vc))
++#elif defined(__aarch64__)
++/* The four lanes in double, two at a time; the product of two singles is
++ * exact there, the sum rounds once (toward zero, FPCR), then to single. */
++#define SPU_XF_FMA_N(name, EXPR, NEXPR) \
++    static inline __attribute__((noinline)) u128 name##_exact(u128 a, u128 b, u128 c) { u128 r; SPU_XF_COUNT(1); \
++        for (int i = 0; i < 4; i++) { const double x = spu_xf_get(a._u32[i]), y = spu_xf_get(b._u32[i]), \
++            z = spu_xf_get(c._u32[i]); r._u32[i] = spu_xf_put(EXPR); } \
++        return r; } \
++    static inline __attribute__((always_inline)) u128 name(u128 a, u128 b, u128 c) { u128 r; \
++        const float32x4_t va = vld1q_f32(a._f32), vb = vld1q_f32(b._f32), vc = vld1q_f32(c._f32); \
++        float64x2_t x = vcvt_f64_f32(vget_low_f32(va)), y = vcvt_f64_f32(vget_low_f32(vb)), z = vcvt_f64_f32(vget_low_f32(vc)); \
++        const float32x2_t lo = vcvt_f32_f64(NEXPR); \
++        x = vcvt_high_f64_f32(va); y = vcvt_high_f64_f32(vb); z = vcvt_high_f64_f32(vc); \
++        const float32x4_t vr = vcvt_high_f32_f64(lo, NEXPR); \
++        vst1q_f32(r._f32, vr); \
++        if (__builtin_expect(!spu_xf_bad_n(vreinterpretq_u32_f32(vr)), 1)) return r; \
++        return name##_exact(a, b, c); }
++SPU_XF_FMA_N(spu_fma, x * y + z, vaddq_f64(vmulq_f64(x, y), z))
++SPU_XF_FMA_N(spu_fms, x * y - z, vsubq_f64(vmulq_f64(x, y), z))
++SPU_XF_FMA_N(spu_fnms, z - x * y, vsubq_f64(z, vmulq_f64(x, y)))
++#else
++SPU_XF_FMA(spu_fma, x * y + z)
++SPU_XF_FMA(spu_fms, x * y - z)
++SPU_XF_FMA(spu_fnms, z - x * y)
++#endif
++
++SPU_XF_CMP2(spu_fcmeq, fabs(x) == fabs(y))
++#if defined(__SSE2__) || defined(_M_X64)
++SPU_XF_CMP2(spu_fcmgt_exact, fabs(x) > fabs(y))
++static inline __attribute__((always_inline)) u128 spu_fcmgt(u128 a, u128 b) {
++    const __m128i ia = _mm_loadu_si128((const __m128i*)a._u32), ib = _mm_loadu_si128((const __m128i*)b._u32);
++    if (__builtin_expect(spu_xf_e255_v(ia) | spu_xf_e255_v(ib), 0)) return spu_fcmgt_exact(a, b);
++    const __m128i m = _mm_set1_epi32(0x7FFFFFFF);
++    u128 r; _mm_storeu_ps(r._f32, _mm_cmpgt_ps(_mm_castsi128_ps(_mm_and_si128(ia, m)), _mm_castsi128_ps(_mm_and_si128(ib, m))));
++    return r; }
++#elif defined(__aarch64__)
++SPU_XF_CMP2(spu_fcmgt_exact, fabs(x) > fabs(y))
++static inline __attribute__((always_inline)) u128 spu_fcmgt(u128 a, u128 b) {
++    const uint32x4_t ia = vld1q_u32(a._u32), ib = vld1q_u32(b._u32);
++    if (__builtin_expect(spu_xf_e255_n(ia) | spu_xf_e255_n(ib), 0)) return spu_fcmgt_exact(a, b);
++    u128 r; vst1q_u32(r._u32, vcagtq_f32(vreinterpretq_f32_u32(ia), vreinterpretq_f32_u32(ib))); return r; }
++#else
++SPU_XF_CMP2(spu_fcmgt, fabs(x) > fabs(y))
++#endif
++#endif /* SPU_FLOAT_FAST */
++
+ #ifdef __cplusplus
+ }
+ #endif
 diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
 index e9b8f613..9638a584 100644
 --- a/runtime/spu/spu_interp.c
@@ -33515,6 +34073,118 @@ index 905b3517..676b0ab8 100644
      /* Trace ONLY the stalled queue's own runs: wkl_data == the sync EA the PPU
       * barrier/ticket probes armed (ticket-pub arms it at first publish, before
       * the PM's first work pass). Idle re-runs of this wid matter as much as the
+diff --git a/runtime/spu/tests/test_spu_float_fast.c b/runtime/spu/tests/test_spu_float_fast.c
+new file mode 100644
+index 00000000..77464d29
+--- /dev/null
++++ b/runtime/spu/tests/test_spu_float_fast.c
+@@ -0,0 +1,106 @@
++/* racacit SPU_FLOAT_FAST (RACiT's float model, spu_helpers.h): spu_fa/fs/fm/fma/fms/fnms and
++ * spu_fcgt/fceq, run under the SPU threads' MXCSR (DAZ + FTZ + round toward zero), against the
++ * exact references (spu_*_ref, run under the default MXCSR they assume) on every kind of input:
++ * ordinary, zeros and denormals, the top of the range and exponent 255. Reports how many lanes
++ * are identical, how many one ulp apart (the model's double rounding in fa/fs/fma), and any that
++ * differ by more -- those fail. Prints a speed comparison too. Build on x86:
++ *   cc -O2 -mavx2 -mfma -DSPU_FLOAT_FAST=1 -I.. -I../.. -I../../.. -I../../../include \
++ *      test_spu_float_fast.c -o t && ./t */
++#include "../spu_helpers.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <time.h>
++#include <xmmintrin.h>
++#if defined(SPU_FLOAT_FAST)
++volatile long g_spu_xf_exact[8];   /* spu_drain.c in the runtime */
++int g_spu_xf_stats_on;
++#endif
++
++static uint64_t s_rng = 0x9E3779B97F4A7C15ull;
++static uint32_t rnd32(void)
++{
++    s_rng ^= s_rng << 13; s_rng ^= s_rng >> 7; s_rng ^= s_rng << 17;
++    return (uint32_t)(s_rng >> 16);
++}
++static uint32_t rnd_float(void)
++{
++    uint32_t sign = (rnd32() & 1u) << 31, man = rnd32() & 0x7FFFFFu, e;
++    switch (rnd32() % 10) {
++    case 0: e = 0; break;                              /* zero / denormal */
++    case 1: e = 1 + rnd32() % 4; break;                /* bottom of normal range */
++    case 2: e = 248 + rnd32() % 8; break;              /* top, into extended range */
++    case 3: return rnd32();                            /* anything */
++    case 4: return sign;                               /* +-0 */
++    default: e = 110 + rnd32() % 36; break;            /* ordinary */
++    }
++    return sign | (e << 23) | man;
++}
++
++static long s_n, s_same, s_ulp1, s_bad;
++static int ok_pair(uint32_t got, uint32_t want)
++{
++    if (got == want) { s_same++; return 1; }
++    if (!((got | want) & 0x7FFFFFFFu)) { s_same++; return 1; }   /* +0 / -0: equal to the SPU */
++    if ((got ^ want) & 0x80000000u) return 0;
++    const uint32_t g = got & 0x7FFFFFFFu, w = want & 0x7FFFFFFFu;
++    if ((g > w ? g - w : w - g) == 1) { s_ulp1++; return 1; }
++    return 0;
++}
++static void check(const char* op, u128 got, u128 want, u128 a, u128 b, u128 c)
++{
++    for (int i = 0; i < 4; i++) {
++        s_n++;
++        if (ok_pair(got._u32[i], want._u32[i])) continue;
++        if (s_bad++ < 20)
++            printf("%s lane %d: %08X %08X %08X -> got %08X want %08X\n", op, i,
++                   a._u32[i], b._u32[i], c._u32[i], got._u32[i], want._u32[i]);
++    }
++}
++static void check_cmp(const char* op, u128 got, u128 want, u128 a, u128 b)
++{
++    for (int i = 0; i < 4; i++) {
++        s_n++;
++        if (got._u32[i] == want._u32[i]) { s_same++; continue; }
++        if (s_bad++ < 20) printf("%s lane %d: %08X %08X -> got %08X want %08X\n", op, i, a._u32[i], b._u32[i], got._u32[i], want._u32[i]);
++    }
++}
++
++int main(void)
++{
++#if !defined(SPU_FLOAT_FAST)
++    puts("test_spu_float_fast: SPU_FLOAT_FAST not defined, nothing to compare");
++    return 0;
++#else
++    const unsigned csr0 = _mm_getcsr(), csr_spu = csr0 | 0xE040u;
++    const long N = 1000000;
++    for (long it = 0; it < N; it++) {
++        u128 a, b, c, w[8], g[8];
++        for (int i = 0; i < 4; i++) { a._u32[i] = rnd_float(); b._u32[i] = rnd_float(); c._u32[i] = rnd_float(); }
++        _mm_setcsr(csr0);
++        w[0] = spu_fa_ref(a, b); w[1] = spu_fs_ref(a, b); w[2] = spu_fm_ref(a, b);
++        w[3] = spu_fma_ref(a, b, c); w[4] = spu_fms_ref(a, b, c); w[5] = spu_fnms_ref(a, b, c);
++        w[6] = spu__exact_fcgt(a, b); w[7] = spu__exact_fceq(a, b);
++        _mm_setcsr(csr_spu);
++        g[0] = spu_fa(a, b); g[1] = spu_fs(a, b); g[2] = spu_fm(a, b);
++        g[3] = spu_fma(a, b, c); g[4] = spu_fms(a, b, c); g[5] = spu_fnms(a, b, c);
++        g[6] = spu_fcgt(a, b); g[7] = spu_fceq(a, b);
++        _mm_setcsr(csr0);
++        static const char* nm[6] = { "fa", "fs", "fm", "fma", "fms", "fnms" };
++        for (int k = 0; k < 6; k++) check(nm[k], g[k], w[k], a, b, c);
++        check_cmp("fcgt", g[6], w[6], a, b); check_cmp("fceq", g[7], w[7], a, b);
++    }
++    printf("lanes %ld: identical %ld (%.3f%%), 1 ulp %ld, WRONG %ld\n",
++           s_n, s_same, 100.0 * s_same / s_n, s_ulp1, s_bad);
++    u128 x, y, z; for (int i = 0; i < 4; i++) { x._f32[i] = 1.0f + i; y._f32[i] = 0.999f; z._f32[i] = 0.5f; }
++    _mm_setcsr(csr_spu);
++    clock_t t0 = clock(); u128 r = x;
++    for (long i = 0; i < 50000000; i++) r = spu_fma(r, y, z);
++    _mm_setcsr(csr0);
++    clock_t t1 = clock(); u128 q = x;
++    for (long i = 0; i < 50000000; i++) q = spu__exact_fma(q, y, z);
++    clock_t t2 = clock();
++    printf("fma x50M: RACiT model %.0f ms, upstream exact %.0f ms (%08X %08X)\n",
++           (t1 - t0) * 1000.0 / CLOCKS_PER_SEC, (t2 - t1) * 1000.0 / CLOCKS_PER_SEC, r._u32[0], q._u32[0]);
++    return s_bad ? 1 : 0;
++#endif
++}
 diff --git a/runtime/spu/tests/test_spu_numeric_semantics.c b/runtime/spu/tests/test_spu_numeric_semantics.c
 index 3f233b33..cab64db5 100644
 --- a/runtime/spu/tests/test_spu_numeric_semantics.c
@@ -33912,7 +34582,7 @@ index 41d5721c..3726d0ba 100644
  
  /* What the main thread is told. The default names the first allocation in the
 diff --git a/runtime/syscalls/sys_timer.c b/runtime/syscalls/sys_timer.c
-index 3a022815..e3bd5f45 100644
+index 3a022815..81819747 100644
 --- a/runtime/syscalls/sys_timer.c
 +++ b/runtime/syscalls/sys_timer.c
 @@ -11,6 +11,9 @@
@@ -34090,7 +34760,7 @@ index 3a022815..e3bd5f45 100644
      return (ns / 1000000000ull) * PS3_TIMEBASE_FREQ +
             (ns % 1000000000ull) * PS3_TIMEBASE_FREQ / 1000000000ull;
  #endif
-@@ -129,6 +264,139 @@ static void write_be64(uint32_t addr, uint64_t val)
+@@ -129,6 +264,140 @@ static void write_be64(uint32_t addr, uint64_t val)
      *p = val;
  }
  
@@ -34121,7 +34791,8 @@ index 3a022815..e3bd5f45 100644
 + * window, and print the wait and the 30 ms before it when a main-thread wait at
 + * <lr> ('Q', racacit_wait_end) took >= min us (default 3000) -- up to <dumps>
 + * times (default 4), 2 s apart. A fight's long waits come at random moments;
-+ * a window armed by present count misses them. "[tl-ring]" heads each dump. */
++ * a window armed by present count misses them. "[tl-ring]" heads each dump.
++ * <lr> 0 = any main-thread wait that long (the slow one differs by fight). */
 +#define PS3_TL_RING 32768
 +static struct { unsigned long long t; char ev; uint32_t a, b; } s_tlr[PS3_TL_RING], s_tlr_cp[PS3_TL_RING];
 +static volatile long s_tlr_n = 0, s_tlr_busy = 0;
@@ -34139,14 +34810,14 @@ index 3a022815..e3bd5f45 100644
 +    const long i = InterlockedIncrement(&s_tlr_n) - 1;
 +    const long k = i & (PS3_TL_RING - 1);
 +    s_tlr[k].t = t; s_tlr[k].ev = ev; s_tlr[k].a = a; s_tlr[k].b = b;
-+    if (ev == 'Q' && a == lr && b >= min_us && left > 0 && t - last > 2000000ull &&
++    if (ev == 'Q' && (lr == 0 || a == lr) && b >= min_us && left > 0 && t - last > 2000000ull &&
 +        !InterlockedExchange(&s_tlr_busy, 1)) {
 +        left--; last = t;
 +        Sleep(2);                            /* let in-flight writers finish */
 +        memcpy(s_tlr_cp, s_tlr, sizeof s_tlr_cp);
 +        qsort(s_tlr_cp, PS3_TL_RING, sizeof s_tlr_cp[0], ps3_tl_cmp);
 +        const unsigned long long lo = t > 30000ull ? t - 30000ull : 0, hi = t + b + 2000ull;
-+        fprintf(stderr, "[tl-ring] wait lr %08X %u us; events from 30 ms before it (+us from there)%c", lr, b, 10);
++        fprintf(stderr, "[tl-ring] wait lr %08X %u us; events from 30 ms before it (+us from there)%c", a, b, 10);
 +        for (long j = 0; j < PS3_TL_RING; j++)
 +            if (s_tlr_cp[j].t >= lo && s_tlr_cp[j].t <= hi)
 +                fprintf(stderr, "[tl] +%-8llu %c %08X %08X%c", s_tlr_cp[j].t - lo, s_tlr_cp[j].ev,
@@ -34230,7 +34901,7 @@ index 3a022815..e3bd5f45 100644
  /* ---------------------------------------------------------------------------
   * sys_timer_usleep
   *
-@@ -137,11 +405,44 @@ static void write_be64(uint32_t addr, uint64_t val)
+@@ -137,11 +406,44 @@ static void write_be64(uint32_t addr, uint64_t val)
  int64_t sys_timer_usleep(ppu_context* ctx)
  {
      uint64_t usec = LV2_ARG_U64(ctx, 0);
@@ -34275,7 +34946,7 @@ index 3a022815..e3bd5f45 100644
      /* PS3_POLLTOP=<seconds>: name the usleep poll sites.
       *
       * A title that is "hung" is usually not blocked on anything -- every thread
-@@ -243,6 +544,13 @@ int64_t sys_timer_usleep(ppu_context* ctx)
+@@ -243,6 +545,13 @@ int64_t sys_timer_usleep(ppu_context* ctx)
          extern void ppu_log_host_chain(const char*);
          ppu_log_host_chain("usleep1ms"); } }
  
@@ -34289,7 +34960,7 @@ index 3a022815..e3bd5f45 100644
  #ifdef _WIN32
      /* Use high-resolution sleep via waitable timer for better precision */
      if (usec >= 1000) {
-@@ -264,10 +572,19 @@ int64_t sys_timer_usleep(ppu_context* ctx)
+@@ -264,10 +573,19 @@ int64_t sys_timer_usleep(ppu_context* ctx)
           * and busy-spins at full speed (so the wait is effectively a no-op).
           * Busy-wait to a precise QPC deadline, yielding inside the spin
           * (SwitchToThread) so a sibling host thread the guest may be waiting on

@@ -90,6 +90,13 @@ if(NOT ANDROID AND (WIN32 OR CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64|X86_64
     set(RACACIT_SIMD_FLAGS "-mavx2;-mfma;-mbmi2")
     set(PS3RECOMP_AVX2 ON CACHE BOOL "" FORCE)
 endif()
+# SPU single precision as v0.13 did it, in the host's own float math: ps3recomp v0.16's
+# exact SPU rounding made the float-heavy SPU jobs (physics: crates, debris) several times
+# slower (spu_helpers.h, SPU_FLOAT_FAST). Before add_subdirectory: the runtime's SPU code too.
+option(RACACIT_SPU_FLOAT_FAST "SPU single precision in native host float math (v0.13's)" ON)
+if(RACACIT_SPU_FLOAT_FAST)
+    add_compile_definitions(SPU_FLOAT_FAST=1)
+endif()
 add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
                  EXCLUDE_FROM_ALL)
 # racacit: cellSpurs' native Edge zlib queue needs the vendored zlib headers.
