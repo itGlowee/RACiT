@@ -300,6 +300,7 @@ static unsigned long long rt_now_us(void);
 static unsigned long long s_rt_present_us;
 extern "C" void ps3_tl_at(unsigned long long t, char ev, uint32_t a, uint32_t b);
 extern "C" void ps3_tl(char ev, uint32_t a, uint32_t b);
+extern "C" long ps3_samp_add_tid(unsigned long tid);   /* the sampler (ppu_loader.cpp) */
 extern "C" unsigned long long ps3_qpc_us(void);
 static void present_guest_frame(void)
 {
@@ -572,9 +573,13 @@ static DWORD WINAPI frame_clock(LPVOID)
     g_gcm_wake_walker = walker_wake;
 #endif
 #ifdef _WIN32
-    /* PS3_SAMPLE_RSX=1: the sampler profiles this thread only. */
+    /* PS3_SAMPLE_RSX=1: the sampler profiles this thread only. PS3_SAMPLE_RSX=add
+     * (with PS3_SAMPLE_HOTLIST / PS3_SAMPLE_SPURS=all): this thread takes its
+     * turn with the main thread and the SPU lanes, for a whole-frame profile. */
     { extern volatile unsigned long g_samp_only_tid;
-      if (getenv("PS3_SAMPLE_RSX")) g_samp_only_tid = GetCurrentThreadId(); }
+      const char* e = getenv("PS3_SAMPLE_RSX");
+      if (e && !strcmp(e, "add")) ps3_samp_add_tid(GetCurrentThreadId());
+      else if (e) g_samp_only_tid = GetCurrentThreadId(); }
 #endif
 
     { char _hb[160]; snprintf(_hb, sizeof _hb, "[hosttid] %lu rsx frame clock / FIFO walker%c", (unsigned long)GetCurrentThreadId(), 10); fputs(_hb, stderr); }
