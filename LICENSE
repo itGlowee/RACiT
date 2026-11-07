@@ -21,7 +21,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 --------------------------------------------------------------------------------
-patches/ps3recomp-0001-racacit-runtime-fixes.patch modifies ps3recomp
+The runtime RACiT builds with, its fork of ps3recomp
+(https://github.com/itGlowee/ps3recomp-racit), modifies ps3recomp
 (https://github.com/sp00nznet/ps3recomp), which is under the following license:
 
 MIT License

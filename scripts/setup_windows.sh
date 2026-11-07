@@ -24,19 +24,13 @@ tools/venv/Scripts/python.exe -m pip install -q --disable-pip-version-check \
     pycryptodome==3.24.1 tabulate==0.10.0 tqdm==4.70.1
 
 echo "== Sources"
-fresh_runtime=0
-[ -d tools/ps3recomp/.git ] || fresh_runtime=1
-pin ps3recomp      sp00nznet/ps3recomp         4e8f3ca87a3e1d87bb83b8b7e9348fe2685cd514
+# The runtime: RACiT's fork of ps3recomp, branch racit (ps3recomp v0.18 + RACiT's
+# changes as real commits; upstream sp00nznet/ps3recomp is merged into it).
+pin ps3recomp      itGlowee/ps3recomp-racit    b134db236fca929bc8925f8566ccebee1e6f9b35
 pin Vulkan-Headers KhronosGroup/Vulkan-Headers c46850864f4661461b0f6cb9922c058ffea4915e
 pin glslang-src    KhronosGroup/glslang        2fbed5e1fb43a1c480fe020e3bb686a31010989a
 pin zlib           madler/zlib                 767c4c947852e143f582c85f14cf573411df1b35
 pin SDL2-src       libsdl-org/SDL              release-2.32.10
-
-# --ignore-whitespace: some of ps3recomp's files mix line endings.
-if [ "$fresh_runtime" = 1 ]; then
-    git -C tools/ps3recomp apply --ignore-whitespace ../../patches/ps3recomp-0001-racacit-runtime-fixes.patch
-    echo "tools/ps3recomp: patched"
-fi
 
 echo "== SDL2 (static)"
 if [ ! -f tools/sdl2-win/lib/libSDL2.a ]; then

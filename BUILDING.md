@@ -49,17 +49,24 @@ number. Play starts the newest build. Settings, saves and `log.txt` live in the 
 | Path | What it is |
 | --- | --- |
 | `game/` | The port: startup, hooks into the game's code, Discord, button prompts |
-| `patches/ps3recomp-0001-racacit-runtime-fixes.patch` | All changes to the [ps3recomp](https://github.com/sp00nznet/ps3recomp) runtime: renderer, audio, SPU, input |
+| `tools/ps3recomp` | The runtime: [RACiT's fork of ps3recomp](https://github.com/itGlowee/ps3recomp-racit/tree/racit) (renderer, audio, SPU, input), pinned in `scripts/setup_windows.sh` |
 | `launcher/` | The launcher, with built-in mods in `launcher/mods/` |
 | `scripts/` | The lifting pipeline and its fixes to the generated code |
 | `windows/` | The Windows build and the zig toolchain files |
 
-**Changing the runtime:** edit `tools/ps3recomp`, then save your work back into the patch:
+**Changing the runtime:** `tools/ps3recomp` is a checkout of the
+[ps3recomp-racit](https://github.com/itGlowee/ps3recomp-racit) fork, branch `racit`
+([upstream ps3recomp](https://github.com/sp00nznet/ps3recomp) plus RACiT's changes). Commit
+your change there and push it to the fork, then point the `pin ps3recomp` line in
+`scripts/setup_windows.sh` at the new commit and commit that here. A fresh setup checks out
+the pinned commit detached; to work on it, check out `racit` (with the fork as a remote):
 
 ```bash
-git -C tools/ps3recomp add -N .
-(cd tools/ps3recomp && git diff --ignore-cr-at-eol HEAD | tr -d '\r') > patches/ps3recomp-0001-racacit-runtime-fixes.patch
+git -C tools/ps3recomp fetch origin racit
+git -C tools/ps3recomp checkout -B racit FETCH_HEAD
 ```
+
+New upstream releases are merged into `racit` from sp00nznet/ps3recomp.
 
 **Hot code lists:** `game/hot_*` only group frequently used code together in the exe for speed.
 They can go stale after big changes without breaking anything. `scripts/dev/hot_funcs.py` regenerates them.
