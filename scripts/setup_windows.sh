@@ -26,7 +26,7 @@ tools/venv/Scripts/python.exe -m pip install -q --disable-pip-version-check \
 echo "== Sources"
 # The runtime: RACiT's fork of ps3recomp, branch racit (ps3recomp v0.18 + RACiT's
 # changes as real commits; upstream sp00nznet/ps3recomp is merged into it).
-pin ps3recomp      itGlowee/ps3recomp-racit    b134db236fca929bc8925f8566ccebee1e6f9b35
+pin ps3recomp      itGlowee/ps3recomp-racit    498c62932e457cd89f2cfbbac55a48d055dd8dc9
 pin Vulkan-Headers KhronosGroup/Vulkan-Headers c46850864f4661461b0f6cb9922c058ffea4915e
 pin glslang-src    KhronosGroup/glslang        2fbed5e1fb43a1c480fe020e3bb686a31010989a
 pin zlib           madler/zlib                 767c4c947852e143f582c85f14cf573411df1b35
