@@ -9758,7 +9758,7 @@ index dab4380..6132681 100644
  /* ---- decoded state getters -------------------------------------------- */
  
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 5c50e4a..ea5eabb 100644
+index 5c50e4a..180276b 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -11,6 +11,7 @@
@@ -10783,7 +10783,7 @@ index 5c50e4a..ea5eabb 100644
      return slot;
  }
  
-@@ -662,18 +1389,179 @@ static u32 eng_zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
+@@ -662,18 +1389,176 @@ static u32 eng_zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
   * a depth-WRITING draw: a write-enable bit alone does not prove the pass
   * produced a usable depth map, and a clear-only zeta falls through to guest
   * memory instead (rsx_live_draw.c:6016-6018, 6265-6269). */
@@ -10840,10 +10840,7 @@ index 5c50e4a..ea5eabb 100644
 +"float4 main(float4 a0 : ATTR0) : SV_Position { return a0; }\n";
 +static const char* const kEngDepthAsColorPS =
 +"struct PSInput {\n"
-+"    float4 position : SV_POSITION; float4 col0 : COLOR0; float4 col1 : COLOR1;\n"
-+"    float4 fog : FOG;\n"
-+"    float4 tc0:TEXCOORD0; float4 tc1:TEXCOORD1; float4 tc2:TEXCOORD2; float4 tc3:TEXCOORD3;\n"
-+"    float4 tc4:TEXCOORD4; float4 tc5:TEXCOORD5; float4 tc6:TEXCOORD6; float4 tc7:TEXCOORD7;\n"
++"    float4 position : SV_POSITION;\n"
 +"};\n"
 +"Texture2D    rsx_tex[16] : register(t0);\n"
 +"SamplerState rsx_samp[16] : register(s0);\n"
